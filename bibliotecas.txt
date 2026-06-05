@@ -1,0 +1,5 @@
+# Bibliotecas do projeto:
+
+cloudscraper
+pandas
+pyarrow
