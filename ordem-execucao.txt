@@ -1,0 +1,54 @@
+ORDEM DE EXECUÇÃO DO PROJETO:
+
+01 -> collect_tournaments.py => salva os arquivos em: 
+    data/raw/tournaments
+        |_ team_1974_tournaments_raw.json (bruto)
+        |_ team_1974_tournaments.json (limpo)
+
+02 -> collect_seasons.py => salva os arquivos em: 
+        |_ data/raw/seasons/raw
+        |_ data/raw/seasons/
+
+03 -> collect_matches.py => salva os arquivos em: 
+        Entrada:
+            |_ data/raw/seasons/seasons.json
+        Saída:
+            |_ data/raw/matches/raw
+            |_ data/raw/matches/
+
+04 -> transform_matches.py 
+        Entrada
+            |_ data/raw/matches/matches.json
+        Saída:
+            |_ data/processed/matches.parquet
+
+05 -> collect_match_details.py 
+        Entrada
+            |_ data/processed/matches.parquet
+        Saída:
+            |_ data/raw/match_details/
+
+06 -> transform_teams.py 
+        Entrada
+            |_ data/processed/matches.parquet
+        Saída:
+            |_ data/processed/teams.parquet
+
+07 -> collect_lineups.py 
+        Entrada
+            |_ data/processed/matches.parquet
+        Saída:
+            |_ data/raw/lineups
+
+08 -> transform_players.py 
+        Entrada
+            |_ data/raw/lineup
+        Saída:
+            |_ data/processed/players.parquet
+
+09 -> transform_lineups.py 
+        Entrada
+            |_ data/raw/lineups
+        Saída:
+            |_ data/processed/lineups.parquet
+
