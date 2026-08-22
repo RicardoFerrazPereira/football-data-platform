@@ -52,3 +52,20 @@ ORDEM DE EXECUÇÃO DO PROJETO:
         Saída:
             |_ data/processed/lineups.parquet
 
+10 -> collect_statistics.py 
+        Entrada
+            |_ data/processed/matches.parquet
+        Saída:
+            |_ data/raw/statistics
+
+11 -> transform_statistics.py 
+        Entrada
+            |_ data/raw/statistics
+        Saída:
+            |_ data/processed/statistics.parquet
+
+12 -> transform_player_statistics.py 
+        Entrada
+            |_ data/raw/lineups/*.json
+        Saída:
+            |_ data/processed/player_statistics.parquet
