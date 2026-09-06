@@ -91,3 +91,9 @@ dist/
 
 .DS_Store
 Thumbs.db
+
+# =====================================
+# ANALYTICS
+# =====================================
+
+analytics/database/*.duckdb
