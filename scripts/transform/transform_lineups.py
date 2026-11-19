@@ -4,9 +4,38 @@ from pathlib import Path
 
 import pandas as pd
 
-# =====================================
+
+# ============================================================
+# CONFIGURAÇÕES
+# ============================================================
+
+RAW_PATH = Path("data/raw/lineups")
+PROCESSED_PATH = Path("data/processed")
+
+MATCHES_PATH = PROCESSED_PATH / "matches.parquet"
+OUTPUT_PATH = PROCESSED_PATH / "lineups.parquet"
+
+SIDES = ["home", "away"]
+PLAYER_GROUPS = ["players"]
+
+OUTPUT_COLUMNS = [
+    "match_id",
+    "team_id",
+    "player_id",
+    "player_name",
+    "starter",
+    "substitute",
+    "position",
+    "shirt_number",
+    "captain",
+    "formation",
+    "side",
+]
+
+
+# ============================================================
 # LOGGING
-# =====================================
+# ============================================================
 
 logging.basicConfig(
     level=logging.INFO,
@@ -16,152 +45,566 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# =====================================
-# CONFIG
-# =====================================
 
-RAW_PATH = Path("data/raw/lineups")
-PROCESSED_PATH = Path("data/processed")
+# ============================================================
+# CONVERSÕES
+# ============================================================
 
-PROCESSED_PATH.mkdir(parents=True, exist_ok=True)
+def to_int(value):
+    """
+    Converte um valor para inteiro.
 
-SIDES = ["home", "away"]
-PLAYER_GROUPS = ["players", "substitutes"]
+    Retorna None quando o valor é nulo ou inválido.
+    """
 
-# =====================================
-# VALIDATE INPUT
-# =====================================
+    if value is None:
+        return None
 
-json_files = list(RAW_PATH.glob("*.json"))
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
 
-if not json_files:
-    raise SystemExit(
-        f"Nenhum arquivo encontrado em: {RAW_PATH}\n"
-        "Execute primeiro: python collect_lineups.py"
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def to_bool(value, default=False):
+    """
+    Converte valores para booleano.
+
+    Trata valores booleanos, numéricos e strings.
+    """
+
+    if value is None:
+        return default
+
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, (int, float)):
+        return bool(value)
+
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+
+        if normalized in {"true", "1", "yes", "sim"}:
+            return True
+
+        if normalized in {"false", "0", "no", "não", "nao"}:
+            return False
+
+    return default
+
+
+# ============================================================
+# RELACIONAMENTO ENTRE PARTIDAS E EQUIPES
+# ============================================================
+
+def load_match_teams():
+    """
+    Carrega os IDs das equipes participantes de cada partida.
+
+    A associação dos jogadores às equipes é determinada pelo
+    lado da escalação:
+
+        home -> home_team_id
+        away -> away_team_id
+
+    O teamId individual presente no JSON da escalação não é
+    utilizado como referência da equipe da partida.
+    """
+
+    if not MATCHES_PATH.exists():
+        raise FileNotFoundError(
+            f"Arquivo de partidas não encontrado: {MATCHES_PATH}"
+        )
+
+    required_columns = [
+        "match_id",
+        "home_team_id",
+        "away_team_id",
+    ]
+
+    matches = pd.read_parquet(
+        MATCHES_PATH,
+        columns=required_columns,
     )
 
-logger.info(f"Arquivos encontrados: {len(json_files)}")
+    if matches.empty:
+        raise ValueError(
+            "O arquivo matches.parquet não contém partidas."
+        )
 
-# =====================================
-# STORAGE
-# =====================================
+    if matches["match_id"].duplicated().any():
+        raise ValueError(
+            "Existem match_id duplicados em matches.parquet."
+        )
 
-lineups = []
+    if matches[required_columns].isna().any().any():
+        raise ValueError(
+            "Existem IDs ausentes em matches.parquet "
+            "nas colunas match_id, home_team_id ou away_team_id."
+        )
 
-# =====================================
-# LOOP FILES
-# =====================================
+    for column in required_columns:
+        matches[column] = matches[column].astype("int64")
 
-for file in json_files:
+    match_teams = (
+        matches
+        .set_index("match_id")[
+            ["home_team_id", "away_team_id"]
+        ]
+        .to_dict("index")
+    )
 
-    match_id = int(file.stem)
+    return match_teams
 
-    with open(file, "r", encoding="utf-8") as f:
-        data = json.load(f)
+
+# ============================================================
+# LEITURA DOS JSONs
+# ============================================================
+
+def load_lineup_file(file):
+    """
+    Carrega e valida a estrutura básica de um JSON de escalação.
+
+    Retorna um dicionário quando válido.
+    Retorna None quando o arquivo não pode ser utilizado.
+    """
+
+    try:
+        with open(file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+    except json.JSONDecodeError as error:
+        logger.warning(
+            f"JSON inválido: {file.name} | {error}"
+        )
+        return None
+
+    except OSError as error:
+        logger.warning(
+            f"Erro ao ler {file.name}: {error}"
+        )
+        return None
+
+    if not isinstance(data, dict):
+        logger.warning(
+            f"Estrutura inválida em {file.name}: "
+            "a raiz do JSON não é um objeto."
+        )
+        return None
+
+    if not any(
+        isinstance(data.get(side), dict)
+        for side in SIDES
+    ):
+        logger.warning(
+            f"Estrutura inválida em {file.name}: "
+            "nenhum lado home/away válido encontrado."
+        )
+        return None
+
+    return data
+
+
+# ============================================================
+# EXTRAÇÃO DOS JOGADORES
+# ============================================================
+
+def extract_players(match_id, data, match_teams):
+    """
+    Extrai os jogadores de uma partida.
+
+    A equipe é determinada pelo lado da escalação e pelo
+    relacionamento com matches.parquet.
+
+    O campo item["teamId"] do JSON não é utilizado.
+    """
+
+    records = []
+
+    if match_id not in match_teams:
+        logger.warning(
+            f"Partida {match_id} não encontrada em matches.parquet."
+        )
+        return records
 
     for side in SIDES:
 
         side_data = data.get(side, {})
 
-        if not side_data:
+        if not isinstance(side_data, dict):
             continue
+
+        # Associação correta da equipe à partida.
+        team_id = match_teams[match_id][f"{side}_team_id"]
 
         formation = side_data.get("formation")
 
         for group in PLAYER_GROUPS:
 
-            for item in side_data.get(group, []):
+            players = side_data.get(group, [])
+
+            if not isinstance(players, list):
+                logger.warning(
+                    f"Lista inválida em {match_id} | "
+                    f"{side} | {group}"
+                )
+                continue
+
+            for item in players:
+
+                if not isinstance(item, dict):
+                    continue
 
                 player = item.get("player", {})
 
-                if not player:
+                if not isinstance(player, dict) or not player:
                     continue
 
-                team_id = item.get("teamId")
-                player_id = player.get("id")
+                player_id = to_int(player.get("id"))
 
-                if team_id is None or player_id is None:
+                if player_id is None:
                     continue
 
-                substitute = item.get("substitute", False)
+                # A classificação é feita pelo campo substitute
+                # do próprio registro do jogador.
+                substitute = to_bool(
+                    item.get("substitute", False)
+                )
 
-                lineups.append({
+                starter = not substitute
+
+                # O Sofascore pode fornecer ambos os campos.
+                # shirtNumber é priorizado.
+                shirt_number = to_int(
+                    item.get("shirtNumber")
+                )
+
+                if shirt_number is None:
+                    shirt_number = to_int(
+                        item.get("jerseyNumber")
+                    )
+
+                records.append({
                     "match_id": match_id,
                     "team_id": team_id,
                     "player_id": player_id,
                     "player_name": player.get("name"),
-                    "starter": not substitute,
+                    "starter": starter,
                     "substitute": substitute,
                     "position": item.get("position"),
-                    "shirt_number": item.get("jerseyNumber"),
-                    "captain": item.get("captain", False),
+                    "shirt_number": shirt_number,
+                    "captain": to_bool(
+                        item.get("captain", False)
+                    ),
                     "formation": formation,
                     "side": side,
                 })
 
-# =====================================
-# DATAFRAME
-# =====================================
+    return records
 
-df = pd.DataFrame(lineups)
 
-logger.info(f"Total linhas antes deduplicação: {len(df)}")
+# ============================================================
+# PROCESSAMENTO PRINCIPAL
+# ============================================================
 
-# =====================================
-# EMPTY CHECK
-# =====================================
+def main():
 
-if df.empty:
-    raise SystemExit("Nenhum lineup encontrado. Verifique os arquivos de entrada.")
+    logger.info("Iniciando transformação das escalações.")
 
-# =====================================
-# REMOVE NULLS
-# =====================================
+    # --------------------------------------------------------
+    # Verificação dos diretórios e arquivos
+    # --------------------------------------------------------
 
-df = df.dropna(subset=["match_id", "team_id", "player_id"])
+    if not RAW_PATH.exists():
+        raise FileNotFoundError(
+            f"Diretório de escalações não encontrado: {RAW_PATH}"
+        )
 
-# =====================================
-# REMOVE DUPLICATES
-# =====================================
+    PROCESSED_PATH.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-df = df.drop_duplicates(subset=["match_id", "team_id", "player_id"])
+    json_files = sorted(RAW_PATH.glob("*.json"))
 
-logger.info(f"Total linhas após deduplicação: {len(df)}")
+    if not json_files:
+        raise SystemExit(
+            f"Nenhum arquivo encontrado em: {RAW_PATH}\n"
+            "Execute primeiro: python scripts/extract/collect_lineups.py"
+        )
 
-# =====================================
-# TYPES
-# =====================================
+    logger.info(
+        f"Arquivos JSON encontrados: {len(json_files)}"
+    )
 
-df["match_id"] = df["match_id"].astype("int64")
-df["team_id"] = df["team_id"].astype("int64")
-df["player_id"] = df["player_id"].astype("int64")
-df["starter"] = df["starter"].astype("bool")
-df["substitute"] = df["substitute"].astype("bool")
-df["side"] = df["side"].astype("category")
-df["position"] = df["position"].astype("category")
+    # --------------------------------------------------------
+    # Carregamento do relacionamento das equipes
+    # --------------------------------------------------------
 
-# =====================================
-# SORT + RESET INDEX
-# =====================================
+    match_teams = load_match_teams()
 
-df = df.sort_values(
-    ["match_id", "team_id", "starter"],
-    ascending=[True, True, False]
-).reset_index(drop=True)
+    logger.info(
+        f"Partidas disponíveis para associação: {len(match_teams)}"
+    )
 
-# =====================================
-# SAVE PARQUET
-# =====================================
+    # --------------------------------------------------------
+    # Extração dos registros
+    # --------------------------------------------------------
 
-output_file = PROCESSED_PATH / "lineups.parquet"
+    lineups = []
 
-df.to_parquet(output_file, engine="pyarrow", compression="snappy", index=False)
+    processed_files = 0
+    invalid_files = 0
+    empty_files = 0
 
-# =====================================
-# LOG FINAL
-# =====================================
+    for file in json_files:
 
-logger.info(f"Arquivo salvo em: {output_file}")
-logger.info(f"Total registros: {len(df)}")
-logger.info(f"\nSchema:\n{df.dtypes}")
-logger.info(f"\nAmostra:\n{df.head(10).to_string()}")
+        match_id = to_int(file.stem)
+
+        if match_id is None:
+            logger.warning(
+                f"Nome de arquivo com match_id inválido: {file.name}"
+            )
+            invalid_files += 1
+            continue
+
+        data = load_lineup_file(file)
+
+        if data is None:
+            invalid_files += 1
+            continue
+
+        records = extract_players(
+            match_id,
+            data,
+            match_teams,
+        )
+
+        if not records:
+            empty_files += 1
+            continue
+
+        lineups.extend(records)
+        processed_files += 1
+
+    logger.info(
+        f"Arquivos processados: {processed_files}"
+    )
+
+    logger.info(
+        f"Arquivos inválidos: {invalid_files}"
+    )
+
+    logger.info(
+        f"Arquivos sem jogadores extraídos: {empty_files}"
+    )
+
+    # --------------------------------------------------------
+    # DataFrame
+    # --------------------------------------------------------
+
+    df = pd.DataFrame(
+        lineups,
+        columns=OUTPUT_COLUMNS,
+    )
+
+    logger.info(
+        f"Total de registros antes da deduplicação: {len(df)}"
+    )
+
+    if df.empty:
+        raise SystemExit(
+            "Nenhum jogador foi encontrado. "
+            "O arquivo Parquet existente não será alterado."
+        )
+
+    # --------------------------------------------------------
+    # Limpeza e deduplicação
+    # --------------------------------------------------------
+
+    df = df.dropna(
+        subset=[
+            "match_id",
+            "team_id",
+            "player_id",
+        ]
+    )
+
+    df = df.drop_duplicates(
+        subset=[
+            "match_id",
+            "team_id",
+            "player_id",
+        ]
+    )
+
+    logger.info(
+        f"Total de registros após deduplicação: {len(df)}"
+    )
+
+    # --------------------------------------------------------
+    # Tipagem
+    # --------------------------------------------------------
+
+    df["match_id"] = df["match_id"].astype("int64")
+    df["team_id"] = df["team_id"].astype("int64")
+    df["player_id"] = df["player_id"].astype("int64")
+
+    df["starter"] = df["starter"].astype("bool")
+    df["substitute"] = df["substitute"].astype("bool")
+    df["captain"] = df["captain"].astype("bool")
+
+    df["shirt_number"] = df["shirt_number"].astype("Int64")
+
+    df["position"] = df["position"].astype("category")
+    df["side"] = df["side"].astype("category")
+
+    # --------------------------------------------------------
+    # Ordenação
+    # --------------------------------------------------------
+
+    df = df.sort_values(
+        ["match_id", "team_id", "starter"],
+        ascending=[True, True, False],
+    ).reset_index(drop=True)
+
+    # --------------------------------------------------------
+    # Validações antes da gravação
+    # --------------------------------------------------------
+
+    if df[OUTPUT_COLUMNS].isna().any().any():
+        # player_name, position, shirt_number e formation
+        # podem ser ausentes na fonte. Os IDs, porém, não.
+        required_id_columns = [
+            "match_id",
+            "team_id",
+            "player_id",
+        ]
+
+        if df[required_id_columns].isna().any().any():
+            raise ValueError(
+                "Existem IDs nulos após a transformação."
+            )
+
+    inconsistent_classification = (
+        df["starter"] == df["substitute"]
+    )
+
+    if inconsistent_classification.any():
+        raise ValueError(
+            "Foram encontrados jogadores com classificação "
+            "inconsistente entre starter e substitute."
+        )
+
+    duplicated_players = df.duplicated(
+        subset=[
+            "match_id",
+            "team_id",
+            "player_id",
+        ]
+    )
+
+    if duplicated_players.any():
+        raise ValueError(
+            "Foram encontrados registros duplicados."
+        )
+
+    # --------------------------------------------------------
+    # Gravação atômica do Parquet
+    # --------------------------------------------------------
+
+    temp_path = PROCESSED_PATH / "lineups.tmp.parquet"
+
+    try:
+
+        df.to_parquet(
+            temp_path,
+            engine="pyarrow",
+            compression="snappy",
+            index=False,
+        )
+
+        # Confere o arquivo temporário antes de substituir
+        # o Parquet definitivo.
+        validation_df = pd.read_parquet(temp_path)
+
+        if len(validation_df) != len(df):
+            raise ValueError(
+                "A quantidade de registros do Parquet "
+                "não corresponde ao DataFrame original."
+            )
+
+        if list(validation_df.columns) != OUTPUT_COLUMNS:
+            raise ValueError(
+                "As colunas do Parquet gerado não correspondem "
+                "ao schema esperado."
+            )
+
+        # Substituição atômica do arquivo definitivo.
+        temp_path.replace(OUTPUT_PATH)
+
+    except Exception:
+
+        if temp_path.exists():
+            temp_path.unlink()
+
+        raise
+
+    # --------------------------------------------------------
+    # Resumo final
+    # --------------------------------------------------------
+
+    logger.info("=" * 60)
+    logger.info("TRANSFORMAÇÃO CONCLUÍDA")
+    logger.info("=" * 60)
+
+    logger.info(
+        f"Arquivo salvo em: {OUTPUT_PATH}"
+    )
+
+    logger.info(
+        f"Total de registros: {len(df):,}"
+    )
+
+    logger.info(
+        f"Partidas representadas: {df['match_id'].nunique():,}"
+    )
+
+    logger.info(
+        f"Equipes representadas: {df['team_id'].nunique():,}"
+    )
+
+    logger.info(
+        f"Jogadores únicos: {df['player_id'].nunique():,}"
+    )
+
+    logger.info(
+        f"Titulares: {df['starter'].sum():,}"
+    )
+
+    logger.info(
+        f"Reservas: {df['substitute'].sum():,}"
+    )
+
+    logger.info(
+        f"\nSchema:\n{df.dtypes}"
+    )
+
+    logger.info(
+        f"\nAmostra:\n{df.head(10).to_string(index=False)}"
+    )
+
+
+# ============================================================
+# EXECUÇÃO
+# ============================================================
+
+if __name__ == "__main__":
+    main()
