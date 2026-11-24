@@ -1,5 +1,6 @@
 # Bibliotecas do projeto:
 
-cloudscraper
+duckdb
 pandas
 pyarrow
+playwright
