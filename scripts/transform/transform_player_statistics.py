@@ -529,6 +529,36 @@ def main():
 
     home_teams, away_teams = load_matches()
 
+    # Processa somente arquivos de partidas existentes em matches.parquet.
+    match_ids = set(home_teams.keys())
+
+    arquivos_ignorados = [
+        file
+        for file in json_files
+        if int(file.stem) not in match_ids
+    ]
+
+    json_files = [
+        file
+        for file in json_files
+        if int(file.stem) in match_ids
+    ]
+
+    if arquivos_ignorados:
+        logger.warning(
+            f"Arquivos ignorados por não constarem em matches.parquet: "
+            f"{len(arquivos_ignorados)}"
+        )
+
+        for file in arquivos_ignorados:
+            logger.warning(
+                f"Partida ignorada: {file.stem}"
+            )
+
+    logger.info(
+        f"Arquivos que serão processados: {len(json_files)}"
+    )
+
     statistics_data = extract_statistics(
         home_teams,
         away_teams,

@@ -179,6 +179,7 @@ def validate_views(conn):
         "vw_vasco_player_match_statistics",
         "vw_vasco_team_period_statistics",
         "vw_vasco_team_statistics",
+        "vw_vasco_player_season_metrics",
     ]
 
     views = conn.execute("""

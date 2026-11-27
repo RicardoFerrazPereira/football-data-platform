@@ -373,6 +373,48 @@ def main():
 
     logger.info(f"Arquivos encontrados: {len(json_files)}")
 
+    # Carrega os IDs das partidas existentes em matches.parquet.
+    matches_file = PROCESSED_PATH / "matches.parquet"
+
+    if not matches_file.exists():
+        raise FileNotFoundError(
+            f"Arquivo não encontrado: {matches_file}"
+        )
+
+    matches_df = pd.read_parquet(
+        matches_file,
+        columns=["match_id"],
+    )
+
+    match_ids = set(matches_df["match_id"].astype("int64"))
+
+    # Identifica arquivos sem correspondência em matches.parquet.
+    arquivos_ignorados = [
+        file
+        for file in json_files
+        if int(file.stem) not in match_ids
+    ]
+
+    # Mantém somente os arquivos de partidas válidas.
+    json_files = [
+        file
+        for file in json_files
+        if int(file.stem) in match_ids
+    ]
+
+    if arquivos_ignorados:
+        logger.warning(
+            f"Arquivos ignorados por não constarem em matches.parquet: "
+            f"{len(arquivos_ignorados)}"
+        )
+
+        for file in arquivos_ignorados:
+            logger.warning(f"Partida ignorada: {file.stem}")
+
+    logger.info(
+        f"Arquivos que serão processados: {len(json_files)}"
+    )
+
     # Toda a leitura e validação ocorre antes de substituir o Parquet.
     df = build_dataframe(json_files)
 
