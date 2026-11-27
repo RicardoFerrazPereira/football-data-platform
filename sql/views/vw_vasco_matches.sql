@@ -1,135 +1,144 @@
 -- Criar a VIEW -> vw_vasco_matches
+
 CREATE OR REPLACE VIEW vw_vasco_matches AS
+
 WITH vasco_matches AS (
+
     SELECT
-        -- =====================================
-        -- IDENTIFICAÇÃO
-        -- =====================================
-		match_id,
+        match_id,
         match_date,
         tournament_id,
         tournament_name,
         season_id,
         season_name,
         status,
-        -- =====================================
-        -- LOCAL DO JOGO
-        -- =====================================
+
+        -- Mandante ou visitante
         CASE
             WHEN home_team_id = 1974 THEN 'HOME'
             WHEN away_team_id = 1974 THEN 'AWAY'
         END AS venue,
-        -- =====================================
-        -- ADVERSÁRIO
-        -- =====================================
+
+        -- Adversário
         CASE
-            WHEN home_team_id = 1974
-                THEN away_team_id
-            WHEN away_team_id = 1974
-                THEN home_team_id
+            WHEN home_team_id = 1974 THEN away_team_id
+            WHEN away_team_id = 1974 THEN home_team_id
         END AS opponent_team_id,
+
         CASE
-            WHEN home_team_id = 1974
-                THEN away_team_name
-            WHEN away_team_id = 1974
-                THEN home_team_name
+            WHEN home_team_id = 1974 THEN away_team_name
+            WHEN away_team_id = 1974 THEN home_team_name
         END AS opponent_team_name,
-        -- =====================================
-        -- PLACAR TEMPO NORMAL
-        -- =====================================
+
+        -- Placar do Vasco no tempo normal
         CASE
-            WHEN home_team_id = 1974
-                THEN home_score
-            WHEN away_team_id = 1974
-                THEN away_score
+            WHEN home_team_id = 1974 THEN home_score
+            WHEN away_team_id = 1974 THEN away_score
         END AS vasco_score,
+
+        -- Placar do adversário no tempo normal
         CASE
-            WHEN home_team_id = 1974
-                THEN away_score
-            WHEN away_team_id = 1974
-                THEN home_score
+            WHEN home_team_id = 1974 THEN away_score
+            WHEN away_team_id = 1974 THEN home_score
         END AS opponent_score,
-        -- =====================================
-        -- PÊNALTIS
-        -- =====================================
+
+        -- Pênaltis do Vasco
         CASE
-            WHEN home_team_id = 1974
-                THEN home_score_penalties
-            WHEN away_team_id = 1974
-                THEN away_score_penalties
+            WHEN home_team_id = 1974 THEN home_score_penalties
+            WHEN away_team_id = 1974 THEN away_score_penalties
         END AS vasco_penalties,
+
+        -- Pênaltis do adversário
         CASE
-            WHEN home_team_id = 1974
-                THEN away_score_penalties
-            WHEN away_team_id = 1974
-                THEN home_score_penalties
+            WHEN home_team_id = 1974 THEN away_score_penalties
+            WHEN away_team_id = 1974 THEN home_score_penalties
         END AS opponent_penalties,
-        -- =====================================
-        -- PLACAR ACUMULADO SOFASCORE
-        -- =====================================
+
+        -- Score current do Vasco
         CASE
-            WHEN home_team_id = 1974
-                THEN home_score_current
-            WHEN away_team_id = 1974
-                THEN away_score_current
+            WHEN home_team_id = 1974 THEN home_score_current
+            WHEN away_team_id = 1974 THEN away_score_current
         END AS vasco_score_current,
+
+        -- Score current do adversário
         CASE
-            WHEN home_team_id = 1974
-                THEN away_score_current
-            WHEN away_team_id = 1974
-                THEN home_score_current
+            WHEN home_team_id = 1974 THEN away_score_current
+            WHEN away_team_id = 1974 THEN home_score_current
         END AS opponent_score_current
+
     FROM matches
+
     WHERE
         home_team_id = 1974
         OR away_team_id = 1974
 )
+
 SELECT
     *,
-    -- =====================================
-    -- RESULTADO NO TEMPO NORMAL
-    -- =====================================
+
+    ----------------------------------------------------------------
+    -- Resultado considerando apenas o placar do jogo
+    -- (tempo normal / placar oficial da partida)
+    ----------------------------------------------------------------
     CASE
-        WHEN vasco_score > opponent_score
-            THEN 'WIN'
-        WHEN vasco_score < opponent_score
-            THEN 'LOSS'
-        WHEN vasco_score = opponent_score
-            THEN 'DRAW'
+        WHEN vasco_score > opponent_score THEN 'WIN'
+        WHEN vasco_score < opponent_score THEN 'LOSS'
+        WHEN vasco_score = opponent_score THEN 'DRAW'
     END AS result_normal_time,
-    -- =====================================
-    -- DECISÃO NOS PÊNALTIS
-    -- =====================================
+
+    ----------------------------------------------------------------
+    -- Identifica se houve decisão por pênaltis
+    --
+    -- IMPORTANTE:
+    -- Não podemos exigir que vasco_score = opponent_score.
+    --
+    -- Em confrontos eliminatórios de ida e volta, por exemplo,
+    -- o jogo pode terminar 2x1 e ainda assim ir para os pênaltis
+    -- por causa do resultado agregado.
+    ----------------------------------------------------------------
     CASE
         WHEN
-            vasco_score = opponent_score
-            AND vasco_penalties IS NOT NULL
+            vasco_penalties IS NOT NULL
             AND opponent_penalties IS NOT NULL
-            THEN TRUE
+        THEN TRUE
         ELSE FALSE
     END AS decided_on_penalties,
-    -- =====================================
-    -- RESULTADO FINAL
-    -- =====================================
+
+    ----------------------------------------------------------------
+    -- Resultado final
+    --
+    -- Primeiro verificamos os pênaltis, pois eles devem prevalecer
+    -- sobre o placar normal quando existem.
+    --
+    -- Depois, caso não haja pênaltis, utilizamos o placar normal.
+    ----------------------------------------------------------------
     CASE
-        -- Vitória no tempo normal
-        WHEN vasco_score > opponent_score
-            THEN 'WIN'
-        -- Derrota no tempo normal
-        WHEN vasco_score < opponent_score
-            THEN 'LOSS'
-        -- Empate + vitória nos pênaltis
+
+        -- Vasco venceu nos pênaltis
         WHEN
-            vasco_score = opponent_score
+            vasco_penalties IS NOT NULL
+            AND opponent_penalties IS NOT NULL
             AND vasco_penalties > opponent_penalties
-            THEN 'WIN'
-        -- Empate + derrota nos pênaltis
+        THEN 'WIN'
+
+        -- Vasco perdeu nos pênaltis
         WHEN
-            vasco_score = opponent_score
+            vasco_penalties IS NOT NULL
+            AND opponent_penalties IS NOT NULL
             AND vasco_penalties < opponent_penalties
-            THEN 'LOSS'
-        -- Empate sem pênaltis
+        THEN 'LOSS'
+
+        -- Sem decisão por pênaltis:
+        -- resultado pelo placar normal
+        WHEN vasco_score > opponent_score
+        THEN 'WIN'
+
+        WHEN vasco_score < opponent_score
+        THEN 'LOSS'
+
         WHEN vasco_score = opponent_score
-            THEN 'DRAW'
+        THEN 'DRAW'
+
     END AS result_final
+
 FROM vasco_matches;

@@ -1,6 +1,57 @@
 CREATE OR REPLACE VIEW vw_vasco_player_season_metrics AS
 
-WITH aggregated AS (
+WITH position_totals AS (
+
+    SELECT
+        player_id,
+        team_id,
+        season_id,
+        tournament_id,
+        position,
+        SUM(COALESCE(minutes_played, 0)) AS position_minutes
+
+    FROM vw_vasco_player_match_statistics
+
+    WHERE position IS NOT NULL
+
+    GROUP BY
+        player_id,
+        team_id,
+        season_id,
+        tournament_id,
+        position
+),
+
+dominant_position AS (
+
+    SELECT
+        player_id,
+        team_id,
+        season_id,
+        tournament_id,
+        position
+
+    FROM (
+        SELECT
+            *,
+            ROW_NUMBER() OVER (
+                PARTITION BY
+                    player_id,
+                    team_id,
+                    season_id,
+                    tournament_id
+                ORDER BY
+                    position_minutes DESC,
+                    position ASC
+            ) AS position_rank
+
+        FROM position_totals
+    )
+
+    WHERE position_rank = 1
+),
+
+aggregated_base AS (
 
     SELECT
 
@@ -10,19 +61,15 @@ WITH aggregated AS (
 
         player_id,
 
-        ARG_MAX(player_name, minutes_played) AS player_name,
+        MAX(player_name) AS player_name,
 
         team_id,
 
         season_id,
-        ARG_MAX(season_name, minutes_played) AS season_name,
+        MAX(season_name) AS season_name,
 
         tournament_id,
-        ARG_MAX(tournament_name, minutes_played) AS tournament_name,
-
-        -- Posição predominante:
-        -- posição em que o jogador acumulou mais minutos
-        ARG_MAX(position, minutes_played) AS position,
+        MAX(tournament_name) AS tournament_name,
 
         -- ============================================================
         -- PARTICIPAÇÃO
@@ -274,6 +321,23 @@ WITH aggregated AS (
         team_id,
         season_id,
         tournament_id
+),
+
+aggregated AS (
+
+    SELECT
+        ab.*,
+        dp.position
+
+    FROM aggregated_base ab
+
+    LEFT JOIN dominant_position dp
+        USING (
+            player_id,
+            team_id,
+            season_id,
+            tournament_id
+        )
 ),
 
 metrics AS (

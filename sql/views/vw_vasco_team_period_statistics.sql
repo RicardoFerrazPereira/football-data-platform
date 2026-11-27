@@ -55,16 +55,14 @@ SELECT
 	MAX(
             CASE
                 WHEN s.team_side = vm.vasco_side
-                 AND s.group_name = 'Match overview'
-                 AND s.statistic_name = 'Expected goals'
+                AND s.statistic_name = 'Expected goals'
                 THEN s.value_numeric
             END
         ) AS vasco_expected_goals,
 	MAX(
             CASE
                 WHEN s.team_side <> vm.vasco_side
-                 AND s.group_name = 'Match overview'
-                 AND s.statistic_name = 'Expected goals'
+                AND s.statistic_name = 'Expected goals'
                 THEN s.value_numeric
             END
         ) AS opponent_expected_goals,
@@ -261,14 +259,14 @@ SELECT
 	MAX(
             CASE
                 WHEN s.team_side = vm.vasco_side
-                 AND s.statistic_name = 'Total tackles'
+                 AND s.statistic_name = 'Tackles'
                 THEN s.value_numeric
             END
         ) AS vasco_total_tackles,
 	MAX(
             CASE
                 WHEN s.team_side <> vm.vasco_side
-                 AND s.statistic_name = 'Total tackles'
+                 AND s.statistic_name = 'Tackles'
                 THEN s.value_numeric
             END
         ) AS opponent_total_tackles,
